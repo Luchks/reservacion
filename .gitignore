@@ -1,0 +1,26 @@
+# Composer
+vendor/
+
+# Logs
+*.log
+
+# Credenciales
+credentials.json
+credentials.json.php
+
+# Configuración local
+.env
+.env.*
+
+# Temporales
+temp/
+
+# Archivos de sistema
+.DS_Store
+Thumbs.db
+
+# Configuración de editores
+.vscode/
+.idea/
+reservas-493816-d129619ad305.json
+credentials.json_
