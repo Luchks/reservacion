@@ -81,7 +81,7 @@
     // ejecuta múltiples veces sobre el mismo item PENDING_CREATE.
     // ─────────────────────────────────────────────────────────────────────
     if (!empty($clientId)) {
-        $stmtCheck = $conn->prepare("SELECT id, codigoReserva FROM items WHERE clientId = ? LIMIT 1");
+        $stmtCheck = $conn->prepare("SELECT id, codigoReserva FROM items WHERE clientId = ? and FlagActivo = 1 LIMIT 1");
         $stmtCheck->bind_param("s", $clientId);
         $stmtCheck->execute();
         $stmtCheck->bind_result($existingId, $existingCodigo);
@@ -286,7 +286,7 @@
             // Recuperamos el id real de la fila existente para devolverlo al cliente Android.
             if ($insertedId == 0 && !empty($codigoReserva)) {
                 $esDuplicado = true;
-                $stmtSel = $conn->prepare("SELECT id FROM items WHERE codigoReserva = ? LIMIT 1");
+                $stmtSel = $conn->prepare("SELECT id FROM items WHERE codigoReserva = ? and FlagActivo = 1 LIMIT 1");
                 if ($stmtSel) {
                     $stmtSel->bind_param("s", $codigoReserva);
                     $stmtSel->execute();
