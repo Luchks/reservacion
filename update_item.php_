@@ -141,90 +141,19 @@
 	    $stmtNewDate->close();
 
         // ==================================================================
-        // 4) ACTUALIZACIÓN EN GOOGLE CALENDAR
+        // 4) ACTUALIZACIÓN EN GOOGLE CALENDAR (Opcional según tu lógica)
         // ==================================================================
-        // Solo se actualiza si:
-        //   a) La reserva tiene un evento de Calendar vinculado ($id_calendar_actual)
-        //   b) El estadoReserva es 'COMPLETADO' (igual que en create_item.php)
-        //   c) Las fechas convertidas son válidas
-        if (!empty($id_calendar_actual) && $estadoReserva === 'COMPLETADO') {
+        if (!empty($id_calendar_actual)) {
             $fechaStart = convertirAGoogleCalendar($fecha, $horaInicio, 0);
             $fechaEnd   = convertirAGoogleCalendar($fechaFinal, $horaFinal, 0);
 
+            // FIX (nuevo): esta validación NO existía antes en este archivo — se agrega
+            // para que actualizarEventoCalendar() nunca reciba una fecha null/inválida.
             if ($fechaStart && $fechaEnd) {
+            $summary = "[$codigoReserva] $nombreTour - $nombrePrincipal";
+            $description_cal = "Tour: $nombreTour\nCliente: $nombrePrincipal\nWhatsApp: $whatsapp";
 
-                // ── Summary: mismo formato que create_item.php ────────────
-                $summary = "$nombreTour X$cantidadPasajero ($tipoServicio) - 👤 $agente";
-
-                // ── Descripción: HTML completo idéntico a create_item.php ─
-                $listaPasajeros = json_decode($pasajeros, true);
-                $textoPasajeros = "";
-                if (is_array($listaPasajeros) && !empty($listaPasajeros)) {
-                    foreach ($listaPasajeros as $p) {
-                        $nombre = is_array($p) ? ($p['nombre'] ?? 'Sin nombre') : $p;
-                        $textoPasajeros .= "- " . mb_strtoupper($nombre) . "<br>";
-                    }
-                } else {
-                    $textoPasajeros = "Ninguno";
-                }
-
-                $description_cal =
-                    "<b>🆔 Código: $codigoReserva</b> <br>" .
-                    "<br><b>=======================</b><br>" .
-                    "<b>📅 DATOS DE RESERVA</b><br>" .
-                    "<b>🗺️ Servicio:</b> $nombreTour<br>" .
-                    "<b>🛠️ Tipo de servicio:</b> $tipoServicio<br>" .
-                    "<b>👥 Tipo de cliente:</b> $tipoCliente<br>" .
-                    "<b>🏢 Contacto o Agente:</b> $agente<br>" .
-                    "<b>📞 Teléfono contacto:</b> $waAgente<br>" .
-                    "<b>📆 Fecha:</b> $fecha<br>" .
-                    "<b>⏰ Hora de Inicio:</b> $horaInicio<br>" .
-                    "<b>🏁 Fecha final:</b> $fechaFinal<br>" .
-                    "<b>⌛ Hora de final:</b> $horaFinal<br>" .
-                    "<br><b>=======================</b><br>" .
-                    "<b>👤 DATOS DEL PASAJERO</b><br>" .
-                    "<b>🔢 Cantidad pasajeros:</b> $cantidadPasajero<br>" .
-                    "<b>🥇 Pasajero principal:</b> $nombrePrincipal<br>" .
-                    "<b>📱 WhatsApp:</b> <a href='https://wa.me/$whatsapp'>📲 $countryCodewhatsapp$whatsapp</a><br>" .
-                    "<b>🛂 pasaporteID:</b> $pasaporteID<br>" .
-                    "<b>📧 Correo:</b> $correo<br>" .
-                    "<b>🌎 País:</b> $pais<br>" .
-                    "<b>🗣️ Idioma:</b> $idioma<br>" .
-                    "<b>👫 Pasajeros adicionales:</b><br>$textoPasajeros<br>" .
-                    "<br><b>=======================</b><br>" .
-                    "<b>💰 PAGOS</b><br>" .
-                    "<b>💳 Tipo de pago:</b> $tipoPago<br>" .
-                    "<b>💵 Precio por persona:</b> $precioPorPersona<br>" .
-                    "<b>💎 Precio total:</b> $precioTotal<br>" .
-                    "<b>✅ Estado de pago:</b> $estadoPago<br>" .
-                    "<b>📄 Comprobante:</b> $comprobantePago<br>" .
-                    "<br><b>=======================</b><br>" .
-                    "<b>📝 OBSERVACIONES</b><br>" .
-                    "<b>🔒 Interna:</b> $observacion<br>" .
-                    "<b>📢 General:</b> $observacionGeneral<br>" .
-                    "<br><b>=======================</b><br>" .
-                    "<b>🚐 PERSONAL ASIGNADO</b><br>" .
-                    "<b>👨‍✈️ Driver:</b> $driver<br>" .
-                    "<b>📞 Teléfono driver:</b> $waDriver<br>" .
-                    "<b>🚩 Guía:</b> $guia<br>" .
-                    "<b>📞 Teléfono guía:</b> $waGuia<br>";
-
-                // ── ColorId: mismo criterio que create_item.php ───────────
-                $colorId = "5"; // Privado por defecto
-                if ($tipoServicio === "Privado") $colorId = "5";
-                if ($tipoServicio === "Grupal")  $colorId = "10";
-                if ($tipoServicio === "Anulado") $colorId = "11";
-
-                actualizarEventoCalendar(
-                    $id_calendar_actual,
-                    $summary,
-                    $description_cal,
-                    $hotelDireccion,
-                    $fechaStart,
-                    $fechaEnd,
-                    $colorId
-                );
-
+            actualizarEventoCalendar($id_calendar_actual, $summary, $description_cal, $hotelDireccion, $fechaStart, $fechaEnd, "1");
             } else {
                 error_log("Google Calendar (update): fecha/hora inválida — inicio: fecha=$fecha hora=$horaInicio (válida=" . ($fechaStart ? 'sí' : 'no') . ") | fin: fecha=$fechaFinal hora=$horaFinal (válida=" . ($fechaEnd ? 'sí' : 'no') . "). No se actualizó el evento id=$id_calendar_actual.");
             }
