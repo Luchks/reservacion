@@ -1,190 +1,209 @@
 <?php
-    header('Content-Type: application/json');
-    header('Access-Control-Allow-Origin: *');
-    header('Access-Control-Allow-Methods: POST');
-    header('Access-Control-Allow-Headers: Content-Type');
+/**
+ * update_tipo_pago.php — VERSIÓN BLINDADA
+ *
+ * CAMBIOS RESPECTO AL ORIGINAL: idénticos a update_estado_pago.php.
+ * Ver comentarios de esa versión para la explicación completa.
+ *
+ * RESUMEN DE CAMBIOS:
+ *  1. ob_start() + función responder() → JSON siempre llega limpio a Android.
+ *  2. try/catch alrededor de Calendar → nunca aborta el script.
+ *  3. Fallback para fechaFinal/horaFinal nulos.
+ *  4. Columna SQL `tipoPago` (camelCase) — confirmado en DDL.
+ */
 
-    include 'db.php';
-    include 'utilitarios/fechaCalendar.php';
-    require 'google_calendar_service.php';
+ob_start();
 
-    $data = json_decode(file_get_contents('php://input'), true);
+header('Content-Type: application/json');
+header('Access-Control-Allow-Origin: *');
+header('Access-Control-Allow-Methods: POST');
+header('Access-Control-Allow-Headers: Content-Type');
 
-    if (!$data || !isset($data['id']) || !isset($data['tipoPago'])) {
-        echo json_encode([
-            "success" => false,
-            "message" => "Datos incompletos (id o tipoPago faltantes)"
-        ]);
-        exit;
-    }
+ini_set('display_errors', 0);
+ini_set('log_errors',     1);
 
-    $id       = (int)$data['id'];
-    $tipoPago = strtoupper(trim($data['tipoPago']));
-    
-    // Recibimos el updatedAt enviado desde la App para verificar concurrencia
-    $clientUpdatedAt = $data['updatedAt'] ?? '';
+include 'db.php';
+include 'utilitarios/fechaCalendar.php';
+require 'google_calendar_service.php';
 
-    // Validar tipos de pago permitidos
-    $tiposValidos = ['POS', 'EFECTIVO', 'PAGO LINK', 'TRANSFERENCIA',
-                     'POS CULQI', 'POS NIUVIZ', 'POS EXTERNO', 'VIATOR'];
-                     
-    if (!in_array($tipoPago, $tiposValidos)) {
-        echo json_encode([
-            "success" => false,
-            "message" => "Tipo de pago inválido: $tipoPago"
-        ]);
-        exit;
-    }
+function responder(array $payload): void {
+    ob_end_clean();
+    echo json_encode($payload);
+    exit;
+}
 
-    // ==================================================================
-    // 1) LEER DATOS ACTUALES Y VERIFICAR CONFLICTO
-    // ==================================================================
-    $stmtRead = $conn->prepare("
-        SELECT updated_at, id_calendar, codigoReserva, nombreTour, tipoCliente,
-               nombrePrincipal, hotelDireccion, fecha, fechaFinal, horaInicio, horaFinal,
-               countryCodewhatsapp, whatsapp, pasajerosAdicionales, pasaporteID,
-               correo, pais, idioma, cantidadPasajero, tipoServicio,
-               agente, countryCodewaAgente, waAgente,
-               estadoPago, precioPorPersona, precioTotal, ComprobantePago,
-               observacion, observacionGeneral,
-               driver, waDriver, guia, waGuia
-        FROM items WHERE id = ?
-    ");
-    $stmtRead->bind_param("i", $id);
-    $stmtRead->execute();
-    $result = $stmtRead->get_result();
-    $currentItem = $result->fetch_assoc();
-    $stmtRead->close();
+$data = json_decode(file_get_contents('php://input'), true);
 
-    if (!$currentItem) {
-        echo json_encode(["success" => false, "message" => "La reserva no existe."]);
-        exit;
-    }
+if (!$data || !isset($data['id']) || !isset($data['tipoPago'])) {
+    responder(["success" => false, "message" => "Datos incompletos (id o tipoPago faltantes)"]);
+}
 
-    // --- VALIDACIÓN DE CONCURRENCIA ---
-    // Si el servidor tiene una fecha distinta a la que la App tiene guardada
-    if (!empty($clientUpdatedAt) && $currentItem['updated_at'] !== $clientUpdatedAt) {
-        echo json_encode([
-            "success" => false,
-            "conflict" => true,
-            "message" => "Conflicto: El tipo de pago fue modificado recientemente por otro usuario.",
-            "serverUpdatedAt" => $currentItem['updated_at']
-        ]);
-        exit;
-    }
+$id              = (int)$data['id'];
+$tipoPago        = strtoupper(trim($data['tipoPago']));
+$clientUpdatedAt = $data['updatedAt'] ?? '';
 
-    // ==================================================================
-    // 2) ACTUALIZAR EN MYSQL
-    // ==================================================================
-    $stmtUpdate = $conn->prepare("UPDATE items SET tipoPago = ? WHERE id = ?");
-    $stmtUpdate->bind_param("si", $tipoPago, $id);
-    $ok = $stmtUpdate->execute();
-    $stmtUpdate->close();
+// ── 1. Validación de dominio ──────────────────────────────────────────────
+// ✅ Lista completa — incluye todos los valores que TipoPagoDropdown.kt puede enviar
+$tiposValidos = [
+    'POS',          // legacy — mantenido para retrocompatibilidad con registros antiguos
+    'EFECTIVO',
+    'PAGO LINK',
+    'TRANSFERENCIA',
+    'POS CULQI',
+    'POS NIUVIZ',
+    'POS EXTERNO',
+    'VIATOR'
+];
 
-    if ($ok) {
-        // Obtener el nuevo timestamp generado por MySQL
-        $stmtNewDate = $conn->prepare("SELECT updated_at FROM items WHERE id = ?");
-        $stmtNewDate->bind_param("i", $id);
-        $stmtNewDate->execute();
-        $stmtNewDate->bind_result($newUpdatedAt);
-        $stmtNewDate->fetch();
-        $stmtNewDate->close();
+if (!in_array($tipoPago, $tiposValidos, true)) {
+    responder(["success" => false, "message" => "Tipo de pago inválido: $tipoPago"]);
+}
 
-        // ==================================================================
-        // 3) ACTUALIZAR GOOGLE CALENDAR (Actualizar descripción y color)
-        // ==================================================================
-        $id_calendar = $currentItem['id_calendar'];
+// ── 2. Leer fila actual y verificar conflicto ─────────────────────────────
+$stmtRead = $conn->prepare("
+    SELECT updated_at, id_calendar, codigoReserva, nombreTour, tipoCliente,
+           nombrePrincipal, hotelDireccion, fecha, fechaFinal, horaInicio, horaFinal,
+           countryCodewhatsapp, whatsapp, pasajerosAdicionales, pasaporteID,
+           correo, pais, idioma, cantidadPasajero, tipoServicio,
+           agente, countryCodewaAgente, waAgente,
+           estadoPago, precioPorPersona, precioTotal, ComprobantePago,
+           observacion, observacionGeneral,
+           driver, waDriver, guia, waGuia
+    FROM items WHERE id = ?
+");
+$stmtRead->bind_param("i", $id);
+$stmtRead->execute();
+$result      = $stmtRead->get_result();
+$currentItem = $result->fetch_assoc();
+$stmtRead->close();
 
-        if (!empty($id_calendar)) {
-            // Color según el estadoPago ACTUAL (no cambia en este endpoint)
-            $estadoPago = $currentItem['estadoPago'];
-            $colorId = "1";
-            if ($estadoPago === 'PAGADO')             $colorId = "10"; // Verde
-            if ($estadoPago === 'PENDIENTE PAGO')     $colorId = "11"; // Rojo
-            if ($estadoPago === 'CREDITO AGENCIA')    $colorId = "5";  // Amarillo
-            if ($estadoPago === 'SERVICIO GRATUITO')  $colorId = "3";  // Morado
+if (!$currentItem) {
+    responder(["success" => false, "message" => "La reserva no existe."]);
+}
 
-            $fechaStart = convertirAGoogleCalendar($currentItem['fecha'],      $currentItem['horaInicio'], 0);
-            $fechaEnd   = convertirAGoogleCalendar($currentItem['fechaFinal'], $currentItem['horaFinal'],  0);
+// ── 3. Validación de concurrencia optimista ───────────────────────────────
+if (!empty($clientUpdatedAt) && $currentItem['updated_at'] !== $clientUpdatedAt) {
+    responder([
+        "success"         => false,
+        "conflict"        => true,
+        "message"         => "Conflicto: el tipo de pago fue modificado recientemente por otro usuario.",
+        "serverUpdatedAt" => $currentItem['updated_at']
+    ]);
+}
 
-            if ($fechaStart && $fechaEnd) {
-                // ── Summary: mismo formato que create_item.php ────────────
-                $summary  = $currentItem['nombreTour'] . " X" . $currentItem['cantidadPasajero'] .
-                            " (" . $currentItem['tipoServicio'] . ") - 👤 " . $currentItem['agente'];
-                $location = $currentItem['hotelDireccion'];
+// ── 4. Actualizar en MySQL ────────────────────────────────────────────────
+// Columna: `tipoPago` (camelCase) — confirmado en DDL y en ItemEntity.kt
+$stmtUpdate = $conn->prepare("UPDATE items SET tipoPago = ? WHERE id = ?");
+$stmtUpdate->bind_param("si", $tipoPago, $id);
+$ok = $stmtUpdate->execute();
+$stmtUpdate->close();
 
-                // ── Pasajeros adicionales ─────────────────────────────────
-                $listaPasajeros = json_decode($currentItem['pasajerosAdicionales'], true);
-                $textoPasajeros = "";
-                if (is_array($listaPasajeros) && !empty($listaPasajeros)) {
-                    foreach ($listaPasajeros as $p) {
-                        $nombre = is_array($p) ? ($p['nombre'] ?? 'Sin nombre') : $p;
-                        $textoPasajeros .= "- " . mb_strtoupper($nombre) . "<br>";
-                    }
-                } else {
-                    $textoPasajeros = "Ninguno";
+if (!$ok) {
+    responder(["success" => false, "message" => "Error al intentar actualizar la base de datos"]);
+}
+
+// ── 5. Obtener el nuevo updated_at ────────────────────────────────────────
+$stmtTs = $conn->prepare("SELECT updated_at FROM items WHERE id = ?");
+$stmtTs->bind_param("i", $id);
+$stmtTs->execute();
+$stmtTs->bind_result($newUpdatedAt);
+$stmtTs->fetch();
+$stmtTs->close();
+$conn->close();
+
+// ── 6. Google Calendar — aislado ─────────────────────────────────────────
+$calendarError = false;
+$id_calendar   = $currentItem['id_calendar'] ?? '';
+
+if (!empty($id_calendar)) {
+    try {
+        $estadoPago = $currentItem['estadoPago'];
+        $colorId = "1";
+        if ($estadoPago === 'PAGADO')             $colorId = "10";
+        if ($estadoPago === 'PENDIENTE PAGO')     $colorId = "11";
+        if ($estadoPago === 'CREDITO AGENCIA')    $colorId = "5";
+        if ($estadoPago === 'SERVICIO GRATUITO')  $colorId = "3";
+
+        // ✅ BLINDAJE CONTRA NULOS
+        $fechaFinalSafe = !empty($currentItem['fechaFinal']) ? $currentItem['fechaFinal'] : $currentItem['fecha'];
+        $horaFinalSafe  = !empty($currentItem['horaFinal'])  ? $currentItem['horaFinal']  : $currentItem['horaInicio'];
+
+        $fechaStart = convertirAGoogleCalendar($currentItem['fecha'], $currentItem['horaInicio'], 0);
+        $fechaEnd   = convertirAGoogleCalendar($fechaFinalSafe,       $horaFinalSafe,             0);
+
+        if ($fechaStart && $fechaEnd) {
+            $summary  = $currentItem['nombreTour'] . " X" . $currentItem['cantidadPasajero'] .
+                        " (" . $currentItem['tipoServicio'] . ") - 👤 " . $currentItem['agente'];
+            $location = $currentItem['hotelDireccion'];
+
+            $listaPasajeros = json_decode($currentItem['pasajerosAdicionales'], true);
+            $textoPasajeros = "";
+            if (is_array($listaPasajeros) && !empty($listaPasajeros)) {
+                foreach ($listaPasajeros as $p) {
+                    $nombre = is_array($p) ? ($p['nombre'] ?? 'Sin nombre') : $p;
+                    $textoPasajeros .= "- " . mb_strtoupper($nombre) . "<br>";
                 }
-
-                // ── Descripción completa idéntica a create_item.php ───────
-                $description_cal =
-                    "<b>🆔 Código: " . $currentItem['codigoReserva'] . "</b> <br>" .
-                    "<br><b>=======================</b><br>" .
-                    "<b>📅 DATOS DE RESERVA</b><br>" .
-                    "<b>🗺️ Servicio:</b> " . $currentItem['nombreTour'] . "<br>" .
-                    "<b>🛠️ Tipo de servicio:</b> " . $currentItem['tipoServicio'] . "<br>" .
-                    "<b>👥 Tipo de cliente:</b> " . $currentItem['tipoCliente'] . "<br>" .
-                    "<b>🏢 Contacto o Agente:</b> " . $currentItem['agente'] . "<br>" .
-                    "<b>📞 Teléfono contacto:</b> " . $currentItem['waAgente'] . "<br>" .
-                    "<b>📆 Fecha:</b> " . $currentItem['fecha'] . "<br>" .
-                    "<b>⏰ Hora de Inicio:</b> " . $currentItem['horaInicio'] . "<br>" .
-                    "<b>🏁 Fecha final:</b> " . $currentItem['fechaFinal'] . "<br>" .
-                    "<b>⌛ Hora de final:</b> " . $currentItem['horaFinal'] . "<br>" .
-                    "<br><b>=======================</b><br>" .
-                    "<b>👤 DATOS DEL PASAJERO</b><br>" .
-                    "<b>🔢 Cantidad pasajeros:</b> " . $currentItem['cantidadPasajero'] . "<br>" .
-                    "<b>🥇 Pasajero principal:</b> " . $currentItem['nombrePrincipal'] . "<br>" .
-                    "<b>📱 WhatsApp:</b> <a href='https://wa.me/" . $currentItem['whatsapp'] . "'>📲 " . $currentItem['countryCodewhatsapp'] . $currentItem['whatsapp'] . "</a><br>" .
-                    "<b>🛂 pasaporteID:</b> " . $currentItem['pasaporteID'] . "<br>" .
-                    "<b>📧 Correo:</b> " . $currentItem['correo'] . "<br>" .
-                    "<b>🌎 País:</b> " . $currentItem['pais'] . "<br>" .
-                    "<b>🗣️ Idioma:</b> " . $currentItem['idioma'] . "<br>" .
-                    "<b>👫 Pasajeros adicionales:</b><br>" . $textoPasajeros . "<br>" .
-                    "<br><b>=======================</b><br>" .
-                    "<b>💰 PAGOS</b><br>" .
-                    "<b>💳 Tipo de pago:</b> " . $tipoPago . "<br>" .  // nuevo valor
-                    "<b>💵 Precio por persona:</b> " . $currentItem['precioPorPersona'] . "<br>" .
-                    "<b>💎 Precio total:</b> " . $currentItem['precioTotal'] . "<br>" .
-                    "<b>✅ Estado de pago:</b> " . $estadoPago . "<br>" .
-                    "<b>📄 Comprobante:</b> " . $currentItem['ComprobantePago'] . "<br>" .
-                    "<br><b>=======================</b><br>" .
-                    "<b>📝 OBSERVACIONES</b><br>" .
-                    "<b>🔒 Interna:</b> " . $currentItem['observacion'] . "<br>" .
-                    "<b>📢 General:</b> " . $currentItem['observacionGeneral'] . "<br>" .
-                    "<br><b>=======================</b><br>" .
-                    "<b>🚐 PERSONAL ASIGNADO</b><br>" .
-                    "<b>👨‍✈️ Driver:</b> " . $currentItem['driver'] . "<br>" .
-                    "<b>📞 Teléfono driver:</b> " . $currentItem['waDriver'] . "<br>" .
-                    "<b>🚩 Guía:</b> " . $currentItem['guia'] . "<br>" .
-                    "<b>📞 Teléfono guía:</b> " . $currentItem['waGuia'] . "<br>";
-
-                actualizarEventoCalendar($id_calendar, $summary, $description_cal, $location, $fechaStart, $fechaEnd, $colorId);
-
             } else {
-                error_log("Google Calendar (update_tipo_pago): fecha/hora inválida — inicio: fecha=" . $currentItem['fecha'] . " hora=" . $currentItem['horaInicio'] . " (válida=" . ($fechaStart ? 'sí' : 'no') . ") | fin: fecha=" . $currentItem['fechaFinal'] . " hora=" . $currentItem['horaFinal'] . " (válida=" . ($fechaEnd ? 'sí' : 'no') . "). No se actualizó el evento id=$id_calendar.");
+                $textoPasajeros = "Ninguno";
             }
+
+            $description_cal =
+                "<b>🆔 Código: " . $currentItem['codigoReserva'] . "</b> <br>" .
+                "<br><b>=======================</b><br>" .
+                "<b>📅 DATOS DE RESERVA</b><br>" .
+                "<b>🗺️ Servicio:</b> " . $currentItem['nombreTour'] . "<br>" .
+                "<b>🛠️ Tipo de servicio:</b> " . $currentItem['tipoServicio'] . "<br>" .
+                "<b>👥 Tipo de cliente:</b> " . $currentItem['tipoCliente'] . "<br>" .
+                "<b>🏢 Contacto o Agente:</b> " . $currentItem['agente'] . "<br>" .
+                "<b>📞 Teléfono contacto:</b> " . $currentItem['waAgente'] . "<br>" .
+                "<b>📆 Fecha:</b> " . $currentItem['fecha'] . "<br>" .
+                "<b>⏰ Hora de Inicio:</b> " . $currentItem['horaInicio'] . "<br>" .
+                "<b>🏁 Fecha final:</b> " . $fechaFinalSafe . "<br>" .
+                "<b>⌛ Hora de final:</b> " . $horaFinalSafe . "<br>" .
+                "<br><b>=======================</b><br>" .
+                "<b>👤 DATOS DEL PASAJERO</b><br>" .
+                "<b>🔢 Cantidad pasajeros:</b> " . $currentItem['cantidadPasajero'] . "<br>" .
+                "<b>🥇 Pasajero principal:</b> " . $currentItem['nombrePrincipal'] . "<br>" .
+                "<b>📱 WhatsApp:</b> <a href='https://wa.me/" . $currentItem['whatsapp'] . "'>📲 " . $currentItem['countryCodewhatsapp'] . $currentItem['whatsapp'] . "</a><br>" .
+                "<b>🛂 Pasaporte/ID:</b> " . $currentItem['pasaporteID'] . "<br>" .
+                "<b>📧 Correo:</b> " . $currentItem['correo'] . "<br>" .
+                "<b>🌎 País:</b> " . $currentItem['pais'] . "<br>" .
+                "<b>🗣️ Idioma:</b> " . $currentItem['idioma'] . "<br>" .
+                "<b>👫 Pasajeros adicionales:</b><br>" . $textoPasajeros . "<br>" .
+                "<br><b>=======================</b><br>" .
+                "<b>💰 PAGOS</b><br>" .
+                "<b>💳 Tipo de pago:</b> " . $tipoPago . "<br>" .
+                "<b>💵 Precio por persona:</b> " . $currentItem['precioPorPersona'] . "<br>" .
+                "<b>💎 Precio total:</b> " . $currentItem['precioTotal'] . "<br>" .
+                "<b>✅ Estado de pago:</b> " . $estadoPago . "<br>" .
+                "<b>📄 Comprobante:</b> " . $currentItem['ComprobantePago'] . "<br>" .
+                "<br><b>=======================</b><br>" .
+                "<b>📝 OBSERVACIONES</b><br>" .
+                "<b>🔒 Interna:</b> " . $currentItem['observacion'] . "<br>" .
+                "<b>📢 General:</b> " . $currentItem['observacionGeneral'] . "<br>" .
+                "<br><b>=======================</b><br>" .
+                "<b>🚐 PERSONAL ASIGNADO</b><br>" .
+                "<b>👨‍✈️ Driver:</b> " . $currentItem['driver'] . "<br>" .
+                "<b>📞 Teléfono driver:</b> " . $currentItem['waDriver'] . "<br>" .
+                "<b>🚩 Guía:</b> " . $currentItem['guia'] . "<br>" .
+                "<b>📞 Teléfono guía:</b> " . $currentItem['waGuia'] . "<br>";
+
+            actualizarEventoCalendar($id_calendar, $summary, $description_cal, $location, $fechaStart, $fechaEnd, $colorId);
+        } else {
+            error_log("update_tipo_pago: fecha/hora inválida id=$id — Calendar no actualizado.");
+            $calendarError = true;
         }
-
-        echo json_encode([
-            "success" => true,
-            "message" => "Tipo de pago actualizado correctamente",
-            "serverUpdatedAt" => $newUpdatedAt
-        ]);
-    } else {
-        echo json_encode([
-            "success" => false,
-            "message" => "Error al intentar actualizar la base de datos"
-        ]);
+    } catch (Throwable $e) {
+        error_log("update_tipo_pago: Calendar exception id=$id: " . $e->getMessage());
+        $calendarError = true;
     }
+}
 
-    $conn->close();
+// ── 7. Respuesta ──────────────────────────────────────────────────────────
+responder([
+    "success"         => true,
+    "message"         => "Tipo de pago actualizado correctamente",
+    "serverUpdatedAt" => $newUpdatedAt,
+    "calendar_error"  => $calendarError
+]);
 ?>
