@@ -38,19 +38,7 @@
     }
 
     // ── 2. Leer fila actual y verificar conflicto ─────────────────────────────
-    // ⚠️ IMPORTANTE: NO se usa bind_result() aquí.
-    // Motivo: sin mysqlnd, libmysqlclient reserva memoria para bind_result()
-    // usando el tamaño MÁXIMO TEÓRICO del tipo de columna (no el tamaño real
-    // del dato). Si alguna columna es TEXT/MEDIUMTEXT/LONGTEXT/BLOB
-    // (p.ej. pasajerosAdicionales, observacion, observacionGeneral,
-    // ComprobantePago), el máximo teórico de LONGTEXT es ~4GB, lo que provoca
-    // "Allowed memory size exhausted (tried to allocate 4294967296 bytes)".
-    // Solución: como $id ya está forzado a (int) más arriba, es seguro
-    // interpolarlo directamente (sin riesgo de inyección SQL) y usar una
-    // consulta NO preparada con $conn->query(), cuyo ->fetch_assoc() SÍ
-    // funciona sin mysqlnd y no sufre este problema de preasignación.
-    $idSeguro = (int)$id;
-    $sqlRead = "
+    $stmtRead = $conn->prepare("
         SELECT updated_at, id_calendar, codigoReserva, nombreTour, tipoCliente,
                nombrePrincipal, hotelDireccion, fecha, fechaFinal, horaInicio, horaFinal,
                countryCodewhatsapp, whatsapp, pasajerosAdicionales, pasaporteID,
@@ -59,13 +47,92 @@
                tipoPago, precioPorPersona, precioTotal, ComprobantePago,
                observacion, observacionGeneral,
                driver, waDriver, guia, waGuia
-        FROM items WHERE id = $idSeguro
-    ";
-    $resultRead  = $conn->query($sqlRead);
-    $currentItem = $resultRead ? $resultRead->fetch_assoc() : null;
-    if ($resultRead) {
-        $resultRead->free();
+        FROM items WHERE id = ?
+    ");
+    $stmtRead->bind_param("i", $id);
+    $stmtRead->execute();
+
+    // ── 2.1 Compatibilidad sin mysqlnd: bind_result() + fetch() ───────────────
+    // NOTA: get_result() requiere la extensión mysqlnd, que este hosting NO tiene.
+    // Se reemplaza por bind_result()/fetch(), respetando EXACTAMENTE el orden
+    // de columnas del SELECT anterior (33 columnas).
+    $stmtRead->bind_result(
+        $col_updated_at,
+        $col_id_calendar,
+        $col_codigoReserva,
+        $col_nombreTour,
+        $col_tipoCliente,
+        $col_nombrePrincipal,
+        $col_hotelDireccion,
+        $col_fecha,
+        $col_fechaFinal,
+        $col_horaInicio,
+        $col_horaFinal,
+        $col_countryCodewhatsapp,
+        $col_whatsapp,
+        $col_pasajerosAdicionales,
+        $col_pasaporteID,
+        $col_correo,
+        $col_pais,
+        $col_idioma,
+        $col_cantidadPasajero,
+        $col_tipoServicio,
+        $col_agente,
+        $col_countryCodewaAgente,
+        $col_waAgente,
+        $col_tipoPago,
+        $col_precioPorPersona,
+        $col_precioTotal,
+        $col_ComprobantePago,
+        $col_observacion,
+        $col_observacionGeneral,
+        $col_driver,
+        $col_waDriver,
+        $col_guia,
+        $col_waGuia
+    );
+
+    $currentItem = null;
+    if ($stmtRead->fetch()) {
+        // Se reconstruye el array asociativo original para que el resto
+        // del código siga funcionando SIN CAMBIOS (mismas claves de antes).
+        $currentItem = [
+            'updated_at'           => $col_updated_at,
+            'id_calendar'          => $col_id_calendar,
+            'codigoReserva'        => $col_codigoReserva,
+            'nombreTour'           => $col_nombreTour,
+            'tipoCliente'          => $col_tipoCliente,
+            'nombrePrincipal'      => $col_nombrePrincipal,
+            'hotelDireccion'       => $col_hotelDireccion,
+            'fecha'                => $col_fecha,
+            'fechaFinal'           => $col_fechaFinal,
+            'horaInicio'           => $col_horaInicio,
+            'horaFinal'            => $col_horaFinal,
+            'countryCodewhatsapp'  => $col_countryCodewhatsapp,
+            'whatsapp'             => $col_whatsapp,
+            'pasajerosAdicionales' => $col_pasajerosAdicionales,
+            'pasaporteID'          => $col_pasaporteID,
+            'correo'               => $col_correo,
+            'pais'                 => $col_pais,
+            'idioma'               => $col_idioma,
+            'cantidadPasajero'     => $col_cantidadPasajero,
+            'tipoServicio'         => $col_tipoServicio,
+            'agente'               => $col_agente,
+            'countryCodewaAgente'  => $col_countryCodewaAgente,
+            'waAgente'             => $col_waAgente,
+            'tipoPago'             => $col_tipoPago,
+            'precioPorPersona'     => $col_precioPorPersona,
+            'precioTotal'          => $col_precioTotal,
+            'ComprobantePago'      => $col_ComprobantePago,
+            'observacion'          => $col_observacion,
+            'observacionGeneral'   => $col_observacionGeneral,
+            'driver'               => $col_driver,
+            'waDriver'             => $col_waDriver,
+            'guia'                 => $col_guia,
+            'waGuia'               => $col_waGuia,
+        ];
     }
+    $stmtRead->close();
 
     if (!$currentItem) {
         responder(["success" => false, "message" => "Reserva no encontrada"]);
