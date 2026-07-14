@@ -1,0 +1,25 @@
+.
+├── check_updates.php
+├── composer.json
+├── composer.lock
+├── create_item.php
+├── create_item_calendar.php
+├── db.php
+├── delete_item.php
+├── get_items.php
+├── get_trash.php
+├── google_calendar_service.php
+├── hard_delete_item.php
+├── login.php
+├── restore_item.php
+├── sync_pending.php
+├── tree.txt
+├── update_estado_pago.php
+├── update_item.php
+├── update_tipo_pago.php
+└── utilitarios
+    ├── calendar_helper.php
+    ├── fechaCalendar.php
+    └── formatos_helper.php
+
+2 directories, 21 files

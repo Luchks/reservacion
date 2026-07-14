@@ -57,12 +57,5 @@
         $items[] = $row;
     }
 
-    // 🔍 [FORENSIC][GET_TRASH] Checkpoint 2 — confirma si el servidor entrega la fila
-    // buscada dentro del arreglo final que se serializa a JSON.
-    // TODO: reemplazar 0 por el serverId real bajo prueba (TARGET_ID en Repository.kt)
-    $forensicTargetId = 0;
-    $forensicPresente = in_array($forensicTargetId, array_column($items, 'id')) ? 'SI' : 'NO';
-    error_log("[FORENSIC][GET_TRASH] total_filas=" . count($items) . " target_id=$forensicTargetId target_presente=$forensicPresente");
-
     echo json_encode($items, JSON_UNESCAPED_UNICODE);
     $conn->close();
